@@ -2,39 +2,39 @@ const express = require('express');
 const mongoose = require('mongoose');
 const multer = require('multer');
 const path = require('path');
-
-const http = require('http'); // <--- NUEVO
-const { Server } = require("socket.io"); // <--- NUEVO
-
+const fs = require('fs'); // Añadido aquí para borrar foto
+const http = require('http'); 
+const { Server } = require("socket.io"); 
 
 const User = require('./models/User');
-const Match = require('./models/Match'); // NUEVO modelo
-const Message = require('./models/Message'); // NUEVO modelo
+const Match = require('./models/Match'); 
+const Message = require('./models/Message'); 
 const app = express();
 
-const server = http.createServer(app); // <--- ENVOLVEMOS EXPRESS
-const io = new Server(server); // <--- INICIAMOS SOCKET.IO
+const server = http.createServer(app); 
+const io = new Server(server); 
+
+// --- CONFIGURACIÓN DE PUERTO Y DB (CLAVE PARA RENDER) ---
+const PORT = process.env.PORT || 3000; 
+// Usamos la variable de entorno que configuramos en Render, si no existe, usamos la local
+const MONGO_URI_FINAL = process.env.MONGO_URI || "mongodb+srv://juanaugustoroldan7_db_user:12345@cluster0.hxfqesc.mongodb.net/?appName=Cluster0"
+
 
 app.use(express.json());
-
 app.use('/uploads', express.static('uploads'));
-
 
 
 io.on('connection', (socket) => {
     console.log('⚡ Un usuario se conectó al socket:', socket.id);
 
-    // 1. Evento: Unirse a una sala de chat específica (Match ID)
     socket.on('join_chat', (matchId) => {
         socket.join(matchId);
         console.log(`Usuario unido a la sala: ${matchId}`);
     });
 
-    // 2. Evento: Enviar mensaje
     socket.on('send_message_socket', async (data) => {
         const { matchId, senderId, mensaje } = data;
 
-        // Guardamos en Base de Datos (Igual que antes)
         try {
             const nuevoMensaje = new Message({
                 matchId,
@@ -44,11 +44,9 @@ io.on('connection', (socket) => {
             });
             await nuevoMensaje.save();
             
-            // Recuperamos datos del remitente para enviarlos completos
             const mensajeCompleto = await Message.findById(nuevoMensaje._id)
                 .populate('senderId', 'nombre fotos');
 
-            // 🔥 EMITIMOS A TODOS EN LA SALA (Incluido el que lo envió)
             io.to(matchId).emit('receive_message', mensajeCompleto);
             console.log(`Mensaje enviado a sala ${matchId}`);
 
@@ -64,10 +62,9 @@ io.on('connection', (socket) => {
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, 'uploads/'); // Carpeta donde se guardarán las fotos
+        cb(null, 'uploads/'); 
     },
     filename: (req, file, cb) => {
-        // Generamos un nombre único: timestamp + nombre original
         const uniqueName = Date.now() + '-' + file.originalname;
         cb(null, uniqueName);
     }
@@ -75,9 +72,8 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
     storage: storage,
-    limits: { fileSize: 5 * 1024 * 1024 }, // Límite de 5MB
+    limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
-        // Solo aceptar imágenes
         const allowedTypes = /jpeg|jpg|png|gif/;
         const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
         const mimetype = allowedTypes.test(file.mimetype);
@@ -90,26 +86,32 @@ const upload = multer({
     }
 });
 
-// --- CONEXIÓN A BASE DE DATOS Y CREACIÓN DE ÍNDICE ---
-const connectionString = "mongodb+srv://juanaugustoroldan7_db_user:12345@cluster0.hxfqesc.mongodb.net/?appName=Cluster0";
+// --- CONEXIÓN A BASE DE DATOS, CREACIÓN DE ÍNDICE Y START DEL SERVIDOR ---
 
-mongoose.connect(connectionString)
+mongoose.connect(MONGO_URI_FINAL)
     .then(async () => {
         console.log("✅ CONECTADO A LA BASE DE DATOS");
         
-        // --- EL MARTILLAZO: Crear el índice manualmente aquí ---
+        // Crear índice Geoespacial
         try {
             await User.collection.createIndex({ ubicacion: "2dsphere" });
             console.log("🌍 ¡Índice Geoespacial (2dsphere) creado con éxito!");
         } catch (error) {
             console.error("Error creando índice:", error);
         }
-        // -------------------------------------------------------
+        
+        // 🔥 INICIO DEL SERVIDOR (AQUÍ ESTABA EL ERROR)
+        server.listen(PORT, '0.0.0.0', () => {
+            console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
+        });
+
     })
     .catch((err) => console.error("❌ ERROR DE CONEXIÓN:", err));
+
+
 // --- RUTAS ---
 
-// 1) REGISTRO (igual que antes)
+// 1) REGISTRO 
 app.post('/register', async (req, res) => {
     try {
         const { email, password, nombre, edad, latitud, longitud } = req.body;
@@ -141,7 +143,7 @@ app.post('/register', async (req, res) => {
     }
 });
 
-// 2) SUBIR FOTOS (NUEVO)
+// 2) SUBIR FOTOS 
 app.post('/upload-photos', upload.array('fotos', 6), async (req, res) => {
     try {
         const { userId } = req.body;
@@ -151,12 +153,11 @@ app.post('/upload-photos', upload.array('fotos', 6), async (req, res) => {
         }
 
     const fotosURLs = req.files.map(file => {
-    return `http://127.0.0.1:3000/uploads/${file.filename}`;
+    return `http://127.0.0.1:3000/uploads/${file.filename}`; // ESTO AÚN DEBE CAMBIARSE
 });
 
-        // Actualizamos el usuario con las nuevas fotos
         const usuario = await User.findById(userId);
-        usuario.fotos.push(...fotosURLs); // Agregamos las nuevas fotos
+        usuario.fotos.push(...fotosURLs); 
         await usuario.save();
 
         res.json({ 
@@ -173,22 +174,18 @@ app.post('/upload-photos', upload.array('fotos', 6), async (req, res) => {
 
 
 // 10) BORRAR FOTO INDIVIDUAL
-const fs = require('fs'); // Necesario para borrar archivos del sistema
+// const fs = require('fs'); // Ya está definido arriba
 
 app.post('/delete-photo', async (req, res) => {
     try {
         const { userId, photoUrl } = req.body;
 
-        // 1. Buscamos al usuario
         const usuario = await User.findById(userId);
         if (!usuario) return res.status(404).json({ error: "Usuario no encontrado" });
 
-        // 2. Filtramos el array para quitar esa URL
         usuario.fotos = usuario.fotos.filter(foto => foto !== photoUrl);
         await usuario.save();
 
-        // 3. (Opcional pero recomendado) Borrar el archivo físico de la carpeta 'uploads'
-        // La URL viene como "http://localhost:3000/uploads/foto.jpg", hay que extraer el path
         const nombreArchivo = photoUrl.split('/uploads/')[1];
         if (nombreArchivo) {
             const rutaArchivo = path.join(__dirname, 'uploads', nombreArchivo);
@@ -207,7 +204,7 @@ app.post('/delete-photo', async (req, res) => {
 });
 
 
-// 3) ACTUALIZAR PERFIL (NUEVO)
+// 3) ACTUALIZAR PERFIL 
 app.put('/update-profile', async (req, res) => {
     try {
         const { userId, bio, genero } = req.body;
@@ -229,28 +226,23 @@ app.put('/update-profile', async (req, res) => {
     }
 });
 
-// 4) FEED (actualizado para incluir fotos)
-// 4) FEED INTELIGENTE (Con Geo, Edad y Género)
+// 4) FEED INTELIGENTE
 app.get('/feed', async (req, res) => {
     try {
-        // Recibimos los filtros desde el iPhone
-        // Si no envían nada, usamos valores por defecto
         const { 
             myId, 
             latitud, 
             longitud, 
-            distanciaMax = 50000, // 50km por defecto
+            distanciaMax = 50000, 
             edadMin = 18, 
             edadMax = 99,
-            generoInteres // "Hombre", "Mujer" o "Todos"
+            generoInteres 
         } = req.query;
 
-        // Validamos que lleguen coordenadas
         if (!latitud || !longitud) {
             return res.status(400).json({ error: "Faltan coordenadas GPS" });
         }
 
-        // 1. FILTRO GEOGRÁFICO ($near es nativo de MongoDB)
         let filtro = {
             ubicacion: {
                 $near: {
@@ -258,28 +250,22 @@ app.get('/feed', async (req, res) => {
                         type: "Point",
                         coordinates: [parseFloat(longitud), parseFloat(latitud)]
                     },
-                    $maxDistance: parseInt(distanciaMax) // Metros
+                    $maxDistance: parseInt(distanciaMax) 
                 }
             },
-            _id: { $ne: myId }, // No mostrarme a mí mismo
-            edad: { $gte: parseInt(edadMin), $lte: parseInt(edadMax) } // Rango de edad
+            _id: { $ne: myId }, 
+            edad: { $gte: parseInt(edadMin), $lte: parseInt(edadMax) } 
         };
 
-        // 2. FILTRO DE GÉNERO (Opcional)
         if (generoInteres && generoInteres !== "Todos") {
             filtro.genero = generoInteres;
         }
 
-        // 3. FILTRO DE "YA VISTOS" (Importante para Swipe)
-        // Buscamos al usuario para saber a quién ya le dio like/pass
-        // (Por ahora solo filtramos likes, luego añadiremos "dislikes")
         const yo = await User.findById(myId);
         if (yo) {
-            // Excluimos ($nin = Not In) a los que ya están en mis likes o matches
             filtro._id.$nin = [...yo.likesEnviados, ...yo.matches, myId];
         }
 
-        // Ejecutamos la búsqueda
         const usuarios = await User.find(filtro).select('-password').limit(20);
         
         res.json(usuarios);
@@ -290,7 +276,7 @@ app.get('/feed', async (req, res) => {
     }
 });
 
-// 5) DAR LIKE / VERIFICAR MATCH (mejorado)
+// 5) DAR LIKE / VERIFICAR MATCH 
 app.post('/like', async (req, res) => {
     try {
         const { myId, targetId } = req.body;
@@ -302,27 +288,23 @@ app.post('/like', async (req, res) => {
             return res.status(404).json({ error: "Usuario no encontrado" });
         }
 
-        // Guardar mi Like
         yo.likesEnviados.addToSet(targetId);
         elOtro.likesRecibidos.addToSet(myId);
         
         await yo.save();
         await elOtro.save();
 
-        // Verificar Match
         const esMatch = elOtro.likesEnviados.some(id => id.toString() === myId);
 
         if (esMatch) {
             console.log(`💘 ¡MATCH CONFIRMADO entre ${yo.nombre} y ${elOtro.nombre}!`);
             
-            // Agregamos a ambos a la lista de matches
             yo.matches.addToSet(targetId);
             elOtro.matches.addToSet(myId);
             
             await yo.save();
             await elOtro.save();
 
-            // Crear registro de Match en BD
             const nuevoMatch = new Match({
                 usuarios: [myId, targetId],
                 fechaMatch: new Date()
@@ -344,32 +326,28 @@ app.post('/like', async (req, res) => {
     }
 });
 
-// 6) OBTENER MIS MATCHES (CORREGIDO PARA CHAT)
+// 6) OBTENER MIS MATCHES 
 app.get('/my-matches/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         
-        // 1. Buscamos en la colección MATCHES todas las conversaciones donde estoy YO
         const matchesEncontrados = await Match.find({ usuarios: userId })
-            .populate('usuarios', 'nombre edad fotos bio'); // Traemos datos de los participantes
+            .populate('usuarios', 'nombre edad fotos bio'); 
             
-        // 2. Transformamos los datos para que Swift los entienda
         const matchesFormateados = matchesEncontrados.map(match => {
-            // Buscamos quién es la "otra persona" en la conversación
             const elOtro = match.usuarios.find(u => u._id.toString() !== userId);
             
-            if (!elOtro) return null; // Por seguridad
+            if (!elOtro) return null; 
             
             return {
-                _id: match._id, // <--- ¡ESTA ES LA CLAVE! Ahora enviamos el ID del Match, no del Usuario
+                _id: match._id, 
                 nombre: elOtro.nombre,
                 edad: elOtro.edad,
                 fotos: elOtro.fotos,
                 bio: elOtro.bio,
-                // Opcional: enviamos el ID del usuario por si sirve luego
                 usuarioId: elOtro._id 
             };
-        }).filter(m => m !== null); // Quitamos nulos si hubo error
+        }).filter(m => m !== null);
 
         res.json({ matches: matchesFormateados });
 
@@ -385,7 +363,6 @@ app.get('/users/:id', async (req, res) => {
     try {
         const { id } = req.params;
         
-        // Buscamos al usuario y excluimos el password por seguridad
         const usuario = await User.findById(id).select('-password');
         
         if (!usuario) {
@@ -400,23 +377,20 @@ app.get('/users/:id', async (req, res) => {
     }
 });
 
-// 7) ENVIAR MENSAJE (NUEVO)
+// 7) ENVIAR MENSAJE 
 app.post('/send-message', async (req, res) => {
     try {
         const { matchId, senderId, mensaje } = req.body;
 
-        // Verificar que el match existe
         const match = await Match.findById(matchId);
         if (!match) {
             return res.status(404).json({ error: "Match no encontrado" });
         }
 
-        // Verificar que el sender es parte del match
         if (!match.usuarios.includes(senderId)) {
             return res.status(403).json({ error: "No autorizado" });
         }
 
-        // Crear el mensaje
         const nuevoMensaje = new Message({
             matchId,
             senderId,
@@ -434,14 +408,14 @@ app.post('/send-message', async (req, res) => {
     }
 });
 
-// 8) OBTENER CONVERSACIÓN (NUEVO)
+// 8) OBTENER CONVERSACIÓN 
 app.get('/conversation/:matchId', async (req, res) => {
     try {
         const { matchId } = req.params;
 
         const mensajes = await Message.find({ matchId })
             .populate('senderId', 'nombre fotos')
-            .sort({ timestamp: 1 }); // Ordenar por fecha
+            .sort({ timestamp: 1 }); 
 
         res.json({ mensajes });
 
@@ -451,25 +425,20 @@ app.get('/conversation/:matchId', async (req, res) => {
     }
 });
 
-// 9) UNMATCH (BORRAR CONVERSACIÓN Y BLOQUEAR)
+// 9) UNMATCH 
 app.post('/unmatch', async (req, res) => {
     try {
         const { userId, matchId } = req.body;
 
-        // 1. Buscamos el match para saber quién es la otra persona
         const match = await Match.findById(matchId);
         if (!match) return res.status(404).json({ error: "Match no encontrado" });
 
         const elOtroId = match.usuarios.find(id => id.toString() !== userId);
 
-        // 2. Eliminamos el Match de la colección principal
         await Match.findByIdAndDelete(matchId);
 
-        // 3. Eliminamos los mensajes de ese chat (Opcional, por privacidad)
         await Message.deleteMany({ matchId: matchId });
 
-        // 4. Sacamos los IDs de los arrays de usuarios
-        // Usamos $pull para sacar un elemento de un array
         await User.findByIdAndUpdate(userId, {
             $pull: { matches: elOtroId, likesEnviados: elOtroId, likesRecibidos: elOtroId }
         });
@@ -488,9 +457,3 @@ app.post('/unmatch', async (req, res) => {
         res.status(500).json({ error: "Error al realizar unmatch" });
     }
 });
-
-// --- ENCENDER SERVIDOR ---
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/datingluck';
-mongoose.connect(MONGO_URI)
-    .then(() => console.log("✅ Conectado a MongoDB"))
-    .catch(err => console.error("❌ Error MongoDB:", err));
