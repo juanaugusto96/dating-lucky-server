@@ -12,6 +12,8 @@
   "description": "",
 
 "dependencies": {
+  "cloudinary": "^1.41.0",
+    "multer-storage-cloudinary": "^4.0.0",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "http": "^0.0.1-security",
