@@ -92,24 +92,25 @@ mongoose.connect(MONGO_URI_FINAL)
     .then(async () => {
         console.log("✅ CONECTADO A LA BASE DE DATOS");
         
-        // Crear índice Geoespacial
         try {
             await User.collection.createIndex({ ubicacion: "2dsphere" });
             console.log("🌍 ¡Índice Geoespacial (2dsphere) creado con éxito!");
         } catch (error) {
             console.error("Error creando índice:", error);
         }
-        
-        // 🔥 INICIO DEL SERVIDOR (AQUÍ ESTABA EL ERROR)
-        server.listen(PORT, '0.0.0.0', () => {
-            console.log(`🚀 Servidor corriendo en el puerto ${PORT}`);
-        });
+    })  // ← CIERRE CORRECTO DEL .then()
+    .catch(err => {
+        console.error("❌ Error conectando a Mongo:", err);
+    });
 
-    })
-    .catch((err) => console.error("❌ ERROR DE CONEXIÓN:", err));
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Servidor EN VIVO y escuchando en el puerto ${PORT}`);
+})
+.on('error', (err) => {
+    console.error('❌ ERROR FATAL AL ENCERDER EL SERVIDOR:', err);
+    process.exit(1);
+});
 
-
-// --- RUTAS ---
 
 // 1) REGISTRO 
 app.post('/register', async (req, res) => {
